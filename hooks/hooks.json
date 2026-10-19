@@ -1,0 +1,17 @@
+{
+  "description": "Install the plugin's node dependencies on first use and after updates",
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/ensure-deps.mjs\"",
+            "timeout": 300
+          }
+        ]
+      }
+    ]
+  }
+}

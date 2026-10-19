@@ -1,0 +1,13 @@
+{
+  "name": "cli-workers",
+  "description": "Make Claude Desktop the boss of Claude Code CLI workers: start and drive interactive claude runs, answer their questions, review their work at the end.",
+  "version": "1.2.0",
+  "author": {
+    "name": "Rayudu0729",
+    "email": "mrrayudu07@gmail.com"
+  },
+  "homepage": "https://github.com/Rayudu0729/claude-code-worker",
+  "repository": "https://github.com/Rayudu0729/claude-code-worker",
+  "license": "MIT",
+  "keywords": ["workers", "orchestration", "mcp", "cli", "delegation"]
+}

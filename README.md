@@ -3,12 +3,34 @@
 Run the interactive `claude` CLI so that both you and a Claude desktop session can drive the same run.
 With the MCP server, a Claude Desktop (or Claude Code) session can start and drive CLI "worker" runs
 as a boss: hand out tasks, answer the workers' questions, and review their work at the end.
-Design: `DESIGN.md`. Plan: `PLAN.md`. Boss/worker instructions for `CLAUDE.md`:
-`docs/orchestrator-CLAUDE.md`.
+Design: `DESIGN.md`. Plan: `PLAN.md`.
 
-## Install
+## Install as a Claude Code plugin (`cli-workers`)
 
 Windows (ConPTY), Node 24+, and the `claude` CLI on `PATH`.
+
+```powershell
+claude plugin marketplace add Rayudu0729/claude-code-worker
+claude plugin install cli-workers@cli-workers
+```
+
+Or inside a session: `/plugin marketplace add Rayudu0729/claude-code-worker`, then
+`/plugin install cli-workers@cli-workers`. Start a new session afterwards.
+
+The plugin brings:
+
+| Part | What |
+|---|---|
+| MCP server `claude-code-worker` | the `cc_*` tools below (`mcp__plugin_cli-workers_claude-code-worker__cc_*`) |
+| Skill `worker-boss` | the boss rules: delegate to workers, pick models, answer questions, review only at the end, run unattended |
+| `/worker-run <task>` | hand a task to workers and run it unattended |
+| `/workers [stop <name>\|stop all]` | list or stop workers |
+| SessionStart hook | runs `npm ci` in the plugin folder on first use and after updates (the MCP launcher does the same if it starts first) |
+
+To use the tools without permission prompts, add
+`"permissions": { "allow": ["mcp__plugin_cli-workers_claude-code-worker"] }` to `~/.claude/settings.json`.
+
+### Manual install (without the plugin system)
 
 ```powershell
 git clone https://github.com/Rayudu0729/claude-code-worker $HOME\.claude\tools\cc-bridge
@@ -18,8 +40,7 @@ node smoke.mjs
 claude mcp add -s user claude-code-worker -- node $HOME\.claude\tools\cc-bridge\cc-mcp.mjs
 ```
 
-Optionally allow the tools without prompts (`"permissions": { "allow": ["mcp__claude-code-worker"] }`
-in `~/.claude/settings.json`) and append `docs/orchestrator-CLAUDE.md` to `~/.claude/CLAUDE.md`.
+The boss rules are then in `skills/worker-boss/SKILL.md`; copy them into `~/.claude/CLAUDE.md`.
 
 ## Start a run (in your terminal; uses your CLI account)
 
@@ -49,7 +70,7 @@ Exit 3 = not running. Control is on 127.0.0.1 only, with a per-run token in
 
 ## MCP server (native tools for Claude Code / Desktop)
 
-`cc-mcp.mjs` exposes the same controls as MCP tools, as the MCP server **claude-code-worker** (tools appear as `mcp__claude-code-worker__cc_*`). Registered at user scope:
+`cc-mcp.mjs` exposes the same controls as MCP tools, as the MCP server **claude-code-worker**. Through the plugin the tools appear as `mcp__plugin_cli-workers_claude-code-worker__cc_*`; with a manual install as `mcp__claude-code-worker__cc_*`, registered with:
 
 ```powershell
 claude mcp add -s user claude-code-worker -- node $HOME\.claude\tools\cc-bridge\cc-mcp.mjs

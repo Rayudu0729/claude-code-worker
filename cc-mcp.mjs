@@ -21,7 +21,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 // the global CLAUDE.md (and start workers of its own).
 const WORKER_PROMPT = 'You are a Claude Code Worker run (cc-bridge), started and driven by a Claude Desktop orchestrator session. ' +
   'Do the task you are given directly. Ignore any CLAUDE.md instructions about orchestrating or delegating to CLI workers, ' +
-  'and do not use cc_start. The orchestrator is your boss: plan and implement the whole task yourself without waiting for ' +
+  'do not use the worker-boss skill or the /worker-run command, and do not use cc_start. The orchestrator is your boss: plan and implement the whole task yourself without waiting for ' +
   'plan approval; it answers your questions while you work and reviews the finished code at the end. Follow its answers and corrections. ' +
   'If you need a decision, ask it plainly in one question and wait.'
 
@@ -44,7 +44,7 @@ const guard = (fn) => async (args) => {
 
 const nameSchema = z.string().regex(/^[a-z0-9][a-z0-9-]{0,31}$/i).describe('Run name: letters, digits, dashes, max 32')
 
-const server = new McpServer({ name: 'claude-code-worker', title: 'Claude Code Worker', version: '1.1.0' })
+const server = new McpServer({ name: 'claude-code-worker', title: 'Claude Code Worker', version: '1.2.0' })
 
 // ---------- runs ----------
 

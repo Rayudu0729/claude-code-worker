@@ -1,0 +1,17 @@
+{
+  "name": "cli-workers",
+  "metadata": {
+    "description": "Claude Code Worker: Claude Desktop as boss, Claude Code CLI runs as workers."
+  },
+  "owner": {
+    "name": "Rayudu0729",
+    "url": "https://github.com/Rayudu0729"
+  },
+  "plugins": [
+    {
+      "name": "cli-workers",
+      "source": "./",
+      "description": "MCP tools to start and drive Claude Code CLI worker runs, a boss skill, /worker-run and /workers commands."
+    }
+  ]
+}

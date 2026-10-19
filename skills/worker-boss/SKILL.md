@@ -1,9 +1,11 @@
-<!-- Append this section to ~/.claude/CLAUDE.md to make Claude Desktop the boss of Claude Code Worker runs. -->
+---
+name: worker-boss
+description: Use in a Claude Desktop (or main Claude Code) session whenever the user hands over an implementation task to be done end to end — features, fixes, refactors, multi-file changes, builds or test loops — especially "do X and I will be away". Act as the boss - delegate the work to Claude Code Worker CLI runs (cc_* tools), answer their questions, review only at the end. Do not use when you are yourself a Claude Code Worker.
+---
 
-## Desktop = boss, CLI = Claude Code Workers
+# Worker boss: Desktop = boss, CLI = Claude Code Workers
 
-Applies only to the **Claude Desktop session**. If your system prompt says you are a
-Claude Code Worker, ignore this whole section and just do the task you were given.
+If your system prompt says you are a Claude Code Worker, stop: this skill is not for you.
 
 **Desktop is the boss.** It owns the decisions: understands the request, splits it
 into worker tasks, picks each worker's model, answers worker questions while they
@@ -81,4 +83,4 @@ stopping to ask "should I continue?".
 Other controls: `cc_list` (running workers), `cc_status`, `cc_key ShiftTab`
 (cycle permission mode), `cc_cli` (`claude mcp …` / `claude plugin …`),
 `cc_settings_get/set`, `cc_permission`. Tool details:
-README.md in the claude-code-worker repo.
+the plugin README.
