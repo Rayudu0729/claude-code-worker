@@ -1,0 +1,24 @@
+{
+  "name": "claude-code-worker",
+  "version": "1.1.0",
+  "description": "Drive interactive Claude Code CLI runs as workers from a Claude Desktop session (PTY bridge + MCP server)",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "engines": {
+    "node": ">=24"
+  },
+  "os": [
+    "win32"
+  ],
+  "scripts": {
+    "test": "node smoke.mjs && node mcp-smoke.mjs",
+    "mcp": "node cc-mcp.mjs"
+  },
+  "dependencies": {
+    "@lydell/node-pty": "1.1.0",
+    "@modelcontextprotocol/sdk": "1.32.1",
+    "@xterm/headless": "5.5.0",
+    "zod": "4.6.5"
+  }
+}
