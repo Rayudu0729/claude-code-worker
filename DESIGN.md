@@ -73,6 +73,14 @@ visible runs open a new console window, hidden runs are detached with output in 
 by dotted key. Child processes get `childEnv()`: host-session variables stripped unless the user set
 them persistently, `PATHEXT` defaulted for trimmed MCP environments.
 
+## Plugin (added 2026-10-19)
+
+Packaged as the Claude Code plugin `cli-workers` (names starting with `claude-` are reserved), with
+the repo root as a one-plugin marketplace. `.mcp.json` starts `scripts/mcp-launch.mjs`, which runs
+`scripts/ensure-deps.mjs` (npm ci when `node_modules` is missing or the lock file changed, guarded by a
+lock dir) before importing `cc-mcp.mjs`; a SessionStart hook runs the same check. The boss rules are
+the `worker-boss` skill; `/worker-run` and `/workers` are commands.
+
 ## Out of scope
 
 Multiple viewers, remote access, recording or replay, and a web UI.
