@@ -23,7 +23,8 @@ const WORKER_PROMPT = 'You are a Claude Code Worker run (cc-bridge), started and
   'Do the task you are given directly. Ignore any CLAUDE.md instructions about orchestrating or delegating to CLI workers, ' +
   'do not use the worker-boss skill or the /worker-run command, and do not use cc_start. The orchestrator is your boss: plan and implement the whole task yourself without waiting for ' +
   'plan approval; it answers your questions while you work and reviews the finished code at the end. Follow its answers and corrections. ' +
-  'If you need a decision, ask it plainly in one question and wait.'
+  'Make reasonable decisions yourself; when you genuinely need one from the boss, ask one clear question with context — ' +
+  'what you are doing, what you found (files, errors), the options you see and which you recommend — then wait for the answer.'
 
 const AUTOCOMPACT = 400000
 
@@ -44,7 +45,7 @@ const guard = (fn) => async (args) => {
 
 const nameSchema = z.string().regex(/^[a-z0-9][a-z0-9-]{0,31}$/i).describe('Run name: letters, digits, dashes, max 32')
 
-const server = new McpServer({ name: 'claude-code-worker', title: 'Claude Code Worker', version: '1.3.0' })
+const server = new McpServer({ name: 'claude-code-worker', title: 'Claude Code Worker', version: '1.4.0' })
 
 // ---------- runs ----------
 

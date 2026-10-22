@@ -44,12 +44,38 @@ defect, `cc_send` the responsible worker the exact problem (file:line, what is
 wrong, what you expect), wait for it to finish, and review again. A one-line fix
 you may make yourself.
 
-**When a worker asks something** (a question, a permission prompt, a menu):
-the boss analyzes it against the user's request and the code and answers it
-itself — `cc_send` for text, `cc_key` Up/Down/Enter for menus. Never leave a
-worker waiting. Only bring it to the user if it is genuinely their decision
-(scope change, risky/irreversible actions, publishing, deleting data, money,
-credentials).
+**When a worker asks something — answer like a senior engineer.** A question,
+a permission prompt, a menu, or a worker stuck on an error is yours to resolve.
+Never leave a worker waiting, and never bounce the question back.
+1. **Understand it fully.** Read the whole exchange (`cc_screen` with
+   `since_send`, plus `scrollback` if needed): what the worker is trying to do,
+   what it already tried, what it found, which options it sees.
+2. **Investigate before answering — don't answer from the worker's summary
+   alone.** Read the files it mentions, grep for how the codebase already solves
+   the same thing (existing patterns, helpers, conventions), check recent git
+   history if relevant, and run a quick check (a build, a test, a query) when that
+   settles it faster than reasoning.
+3. **Decide.** Give one clear answer with a short reason: what to do, where
+   (file paths, function names), which existing pattern to follow, a snippet if
+   it helps. No "it depends", no list of options for the worker to choose from.
+   Prefer the simplest approach that fits the repo's conventions and the user's
+   request.
+4. **Correct course when needed.** If the question shows the worker is heading
+   the wrong way (wrong file, over-engineering, scope creep, breaking an API),
+   say so plainly: stop, do X instead, because Y.
+5. **Errors.** If the worker is stuck on an error, diagnose the root cause
+   yourself (read the error and the code) and give the fix direction, not just
+   "try again". After two failed attempts on the same problem, re-brief it and
+   escalate its model.
+6. **Permission prompts and menus** (`cc_key` Up/Down/Enter): approve when the
+   action is inside the task and safe. Deny and give a safer alternative for
+   anything risky — deleting data, force pushes, production systems, secrets,
+   files outside the project.
+7. **Only the user's decisions go to the user:** scope changes, irreversible or
+   risky actions, publishing, deleting data, money, credentials. Send those as a
+   push notification and keep the other work going.
+8. Keep a one-line note of each decision you made; list them in the final
+   summary so the user sees what was decided on their behalf.
 
 **Pick the worker model by task**, via `cc_start` `model`, or switch a running
 worker with `cc_send "/model <name>"` when the task changes:

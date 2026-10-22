@@ -13,7 +13,8 @@ if (/^\s*\/(cli-workers:)?(worker-run|workers)\b/.test(prompt)) process.exit(0)
 
 const additionalContext = '[cli-workers boss mode] You are the boss session. If this message asks for implementation ' +
   'work (build, add, fix, change, refactor, migrate, write tests, make a build pass), invoke the cli-workers:worker-boss ' +
-  'skill and delegate the work to Claude Code Workers with the cc_* tools instead of editing code yourself. Questions, ' +
+  'skill and delegate the work to Claude Code Workers with the cc_* tools instead of editing code yourself. When a worker ' +
+  'asks something, act as its senior engineer: investigate the code yourself, then give one decisive answer. Questions, ' +
   'explanations, reading code, reviews and one-line edits: handle them directly.'
 
 process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: 'UserPromptSubmit', additionalContext } }))
