@@ -1,6 +1,17 @@
 {
-  "description": "Install the plugin's node dependencies on first use and after updates",
+  "description": "Install the plugin's node dependencies on first use and after updates; remind main sessions to delegate implementation work to workers",
   "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/boss-hook.mjs\"",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
     "SessionStart": [
       {
         "matcher": "startup",

@@ -44,7 +44,7 @@ const guard = (fn) => async (args) => {
 
 const nameSchema = z.string().regex(/^[a-z0-9][a-z0-9-]{0,31}$/i).describe('Run name: letters, digits, dashes, max 32')
 
-const server = new McpServer({ name: 'claude-code-worker', title: 'Claude Code Worker', version: '1.2.0' })
+const server = new McpServer({ name: 'claude-code-worker', title: 'Claude Code Worker', version: '1.3.0' })
 
 // ---------- runs ----------
 

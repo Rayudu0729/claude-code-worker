@@ -26,6 +26,7 @@ The plugin brings:
 | `/worker-run <task>` | hand a task to workers and run it unattended |
 | `/workers [stop <name>\|stop all]` | list or stop workers |
 | SessionStart hook | runs `npm ci` in the plugin folder on first use and after updates (the MCP launcher does the same if it starts first) |
+| UserPromptSubmit hook | boss mode: on every message in a main session, tells Claude to use `worker-boss` and delegate implementation work to workers (silent inside workers and for `/worker-run`, `/workers`) |
 
 To use the tools without permission prompts, add
 `"permissions": { "allow": ["mcp__plugin_cli-workers_claude-code-worker"] }` to `~/.claude/settings.json`.
