@@ -26,7 +26,9 @@ const WORKER_PROMPT = 'You are a Claude Code Worker run (cc-bridge), started and
   'Make reasonable decisions yourself; when you genuinely need one from the boss, ask one clear question with context — ' +
   'what you are doing, what you found (files, errors), the options you see and which you recommend — then wait for the answer.'
 
-const AUTOCOMPACT = 400000
+const AUTOCOMPACT = 200000
+// Cap on lines a since_send read returns, so a long worker reply does not flood the boss's context.
+const MAX_LINES = 150
 
 function defaultPermissionMode() {
   try { return JSON.parse(fs.readFileSync(path.join(os.homedir(), '.claude', 'settings.json'), 'utf8')).permissions?.defaultMode ?? 'default' } catch { return 'default' }
@@ -45,7 +47,7 @@ const guard = (fn) => async (args) => {
 
 const nameSchema = z.string().regex(/^[a-z0-9][a-z0-9-]{0,31}$/i).describe('Run name: letters, digits, dashes, max 32')
 
-const server = new McpServer({ name: 'claude-code-worker', title: 'Claude Code Worker', version: '1.4.0' })
+const server = new McpServer({ name: 'claude-code-worker', title: 'Claude Code Worker', version: '1.5.0' })
 
 // ---------- runs ----------
 
@@ -56,7 +58,7 @@ server.registerTool('cc_start', {
     cwd: z.string().optional().describe('Working directory for the run (default: this server\'s cwd)'),
     model: z.string().optional().describe('claude model for the run: haiku, sonnet, opus, or a full model id. Switch later with cc_send "/model <name>"'),
     permission_mode: z.enum(['acceptEdits', 'auto', 'bypassPermissions', 'manual', 'dontAsk', 'plan']).optional().describe('Permission mode for the run (default: the user\'s settings defaultMode, reported in the result)'),
-    autocompact: z.number().int().min(50000).optional().describe('Auto-compact the worker\'s context at this many tokens (default 400000)'),
+    autocompact: z.number().int().min(50000).optional().describe('Auto-compact the worker\'s context at this many tokens (default 200000)'),
     args: z.array(z.string()).optional().describe('Extra claude arguments, e.g. ["--resume","<id>"], or a first prompt as the last item'),
     command: z.array(z.string()).optional().describe('Run this command instead of claude (for testing), e.g. ["powershell","-NoLogo"]'),
     visible: z.boolean().optional(),
@@ -118,16 +120,19 @@ server.registerTool('cc_list', {
 }, guard(async () => ok(listSessions())))
 
 server.registerTool('cc_screen', {
-  description: 'Read the rendered terminal screen of a run. since_send=true returns everything from the last cc_send to now (the whole reply, even if it scrolled off screen); otherwise the visible screen plus optional scrollback lines.',
-  inputSchema: { name: nameSchema, since_send: z.boolean().optional(), scrollback: z.number().int().min(0).max(2000).optional() },
-}, guard(async ({ name, since_send = false, scrollback = 0 }) => ok(await screenText(name, since_send, scrollback))))
+  description: 'Read the rendered terminal screen of a run. since_send=true returns the output from the last cc_send to now (its last max_lines lines, default 150; 0 = all); otherwise the visible screen plus optional scrollback lines.',
+  inputSchema: { name: nameSchema, since_send: z.boolean().optional(), scrollback: z.number().int().min(0).max(2000).optional(), max_lines: z.number().int().min(0).optional() },
+}, guard(async ({ name, since_send = false, scrollback = 0, max_lines = MAX_LINES }) => ok(await screenText(name, since_send, scrollback, max_lines))))
 
-async function screenText(name, sinceSend, scrollback = 0) {
+async function screenText(name, sinceSend, scrollback = 0, maxLines = MAX_LINES) {
   const s = await call(name, 'GET', `/screen?scrollback=${scrollback}${sinceSend ? '&since=send' : ''}`)
   const idle = Math.round((Date.now() - s.lastOutputAt) / 1000)
   const state = s.exited ? 'exited' : WORKING.test(s.text) ? 'working' : 'idle'
   const note = sinceSend && !s.sinceSend ? ', since_send unavailable: visible screen only' : sinceSend ? ', since last send' : ''
-  return `[${name} ${state}, last output ${idle}s ago${note}]\n${s.text}`
+  let text = s.text
+  const lines = text.split('\n')
+  if (sinceSend && maxLines && lines.length > maxLines) text = `[${lines.length - maxLines} earlier lines omitted; max_lines=0 for all]\n${lines.slice(-maxLines).join('\n')}`
+  return `[${name} ${state}, last output ${idle}s ago${note}]\n${text}`
 }
 
 server.registerTool('cc_send', {
@@ -147,21 +152,24 @@ server.registerTool('cc_key', {
 }))
 
 server.registerTool('cc_wait', {
-  description: 'Block until a condition, then return the screen. done=true waits for the claude worker to finish its turn (no "esc to interrupt" in the status line, screen steady 2 s) — use this after sending a task; it also returns when the worker stops to ask a question or show a menu. idle waits for the screen to be unchanged for that many seconds; match waits for a regex (multiline). since_send=true returns everything since the last cc_send instead of the visible screen. Many MCP clients cut tool calls off at 60 s, so keep timeout at 50 or less and call again on "timed out" (the worker is still working).',
+  description: 'Block until a condition, then return the screen. done=true waits for the claude worker to finish its turn (no "esc to interrupt" in the status line, screen steady 2 s) — use this after sending a task; it also returns when the worker stops to ask a question or show a menu. idle waits for the screen to be unchanged for that many seconds; match waits for a regex (multiline). since_send=true returns the output since the last cc_send (its last max_lines lines, default 150) instead of the visible screen. On timeout only a one-line status comes back, to save context. Many MCP clients cut tool calls off at 60 s, so keep timeout at 50 or less and call again on "timed out" (the worker is still working).',
   inputSchema: {
     name: nameSchema,
     done: z.boolean().optional(),
     idle: z.number().min(0.5).max(600).optional(),
     match: z.string().optional(),
     since_send: z.boolean().optional(),
+    max_lines: z.number().int().min(0).optional().describe('With since_send: return at most this many last lines (default 150, 0 = all)'),
     timeout: z.number().min(1).max(1800).optional().describe('Seconds before giving up (default 50)'),
   },
-}, guard(async ({ name, done, idle, match, since_send = false, timeout = 50 }) => {
+}, guard(async ({ name, done, idle, match, since_send = false, max_lines = MAX_LINES, timeout = 50 }) => {
   if (!done && !idle && !match) return err('give done, idle, or match')
   if (match) try { new RegExp(match, 'm') } catch (e) { return err(`bad regex: ${e.message}`) }
   const r = await waitFor(name, { done, idleSec: idle, match, timeoutSec: timeout })
   const head = r.met ? 'condition met' : r.exited ? 'run exited' : `timed out after ${timeout}s, still working`
-  const body = r.timedOut || r.exited || !since_send ? r.text : await screenText(name, true)
+  // A timeout means "still working": return only the status line, not the whole screen.
+  const status = (r.text.split('\n').find((l) => WORKING.test(l)) ?? '').trim().slice(0, 200)
+  const body = r.timedOut ? status : r.exited || !since_send ? r.text : await screenText(name, true, 0, max_lines)
   return { ...ok(`[${head}]\n${body}`), isError: r.timedOut }
 }))
 

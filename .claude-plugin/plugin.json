@@ -1,7 +1,7 @@
 {
   "name": "cli-workers",
   "description": "Make Claude Desktop the boss of Claude Code CLI workers: start and drive interactive claude runs, answer their questions, review their work at the end.",
-  "version": "1.4.0",
+  "version": "1.5.0",
   "author": {
     "name": "Rayudu0729",
     "email": "mrrayudu07@gmail.com"

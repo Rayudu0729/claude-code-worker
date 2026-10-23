@@ -79,12 +79,12 @@ claude mcp add -s user claude-code-worker -- node $HOME\.claude\tools\cc-bridge\
 
 | Tool | Does |
 |---|---|
-| `cc_start` | start a worker run: `name`, `cwd`, `model` (haiku/sonnet/opus), `permission_mode`, `autocompact` (default 400000 tokens), `args` (claude flags / first prompt), `visible` (new terminal window, default) or hidden. Workers always use the inline TUI (`--settings {"tui":"default"}`) so output has scrollback, and get a system-prompt note plus `CC_BRIDGE_WORKER` env so they don't follow the orchestrator rules in the global CLAUDE.md or start workers. The result shows the effective permission mode; `command` shows `<worker prompt>` instead of the prompt text |
+| `cc_start` | start a worker run: `name`, `cwd`, `model` (haiku/sonnet/opus), `permission_mode`, `autocompact` (default 200000 tokens), `args` (claude flags / first prompt), `visible` (new terminal window, default) or hidden. Workers always use the inline TUI (`--settings {"tui":"default"}`) so output has scrollback, and get a system-prompt note plus `CC_BRIDGE_WORKER` env so they don't follow the orchestrator rules in the global CLAUDE.md or start workers. The result shows the effective permission mode; `command` shows `<worker prompt>` instead of the prompt text |
 | `cc_list` | live runs |
 | `cc_screen` / `cc_status` | read screen (`since_send` = whole output since the last send, or `scrollback` lines) with a working/idle state / status |
 | `cc_send` | type text, Enter by default — prompts and slash commands (`/model opus`, `/mcp`, `/compact`). Multi-line text goes as one bracketed paste and is submitted once |
 | `cc_key` | press a key (ShiftTab cycles permission mode) |
-| `cc_wait` | block until `done` (claude turn over: no "esc to interrupt", screen steady 2 s), `idle` seconds, or regex `match`; `since_send` returns the whole reply. Keep `timeout` ≤ 50 s |
+| `cc_wait` | block until `done` (claude turn over: no "esc to interrupt", screen steady 2 s), `idle` seconds, or regex `match`; `since_send` returns the reply (last `max_lines`, default 150); a timeout returns only a status line. Keep `timeout` ≤ 50 s |
 | `cc_stop` | stop a run; returns once it is gone |
 | `cc_cli` | `claude mcp …`, `claude plugin …`, `claude --version` (other subcommands refused) |
 | `cc_settings_get` / `cc_settings_set` | read / set / delete a dotted key in user, project or local `settings.json` |

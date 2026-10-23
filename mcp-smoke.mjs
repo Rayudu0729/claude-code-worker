@@ -35,6 +35,10 @@ try {
   await tool('cc_send', { name, text: '1..40 | % { "row-$_" }' })
   const ss = text(await tool('cc_wait', { name, done: true, since_send: true }))
   check(/since last send/.test(ss) && /^row-1\s*$/m.test(ss) && /^row-40\s*$/m.test(ss), 'cc_wait done + since_send returns output that scrolled off screen')
+  const cap = text(await tool('cc_screen', { name, since_send: true, max_lines: 10 }))
+  check(/earlier lines omitted/.test(cap) && !/^row-1\s*$/m.test(cap) && /^row-40\s*$/m.test(cap), 'since_send max_lines keeps only the last lines')
+  const to = await tool('cc_wait', { name, match: 'never-appears-xyz', timeout: 2 })
+  check(to.isError && text(to).split('\n').filter(Boolean).length <= 2, 'cc_wait timeout returns only a status line')
 
   await tool('cc_send', { name, text: 'echo "ml-a"\necho "ml-b"' })
   const ml = text(await tool('cc_wait', { name, match: '^ml-b\\s*$', timeout: 20 }))

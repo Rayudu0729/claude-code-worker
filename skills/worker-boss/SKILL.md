@@ -17,7 +17,7 @@ investigations — goes to a CLI worker.
 **Workers: the `claude-code-worker` MCP tools (`cc_*`).**
 1. `cc_start` one worker per independent task: short `name`, project `cwd`,
    `model` (see below). Visible by default so the user can watch. Workers
-   auto-compact at 400k tokens of context (`autocompact`, default 400000).
+   auto-compact at 200k tokens of context (`autocompact`, default 200000).
 2. `cc_wait` with `done: true` before every `cc_send`, so you never type over
    the user or a busy worker.
 3. `cc_send` a self-contained brief: goal, files/area, constraints, and what
@@ -25,11 +25,12 @@ investigations — goes to a CLI worker.
    (sent as one paste). Write it in full first — a send cannot be recalled. The
    worker plans and implements on its own — no plan approval step.
 4. Loop `cc_wait` with `done: true, since_send: true` (timeout ≤ 50 s per call;
-   "timed out, still working" means call again). It returns when the worker
-   finishes its turn or stops to ask something, with the whole reply since your
-   send — answer any question (see below) and continue.
+   "timed out, still working" returns only a status line — just call again). It
+   returns when the worker finishes its turn or stops to ask something, with the
+   last 150 lines of the reply since your send (`max_lines: 0` only if you truly
+   need all) — answer any question (see below) and continue.
 5. **Context limit:** if a worker's status line shows its context at or above
-   400k tokens and it has not compacted yet, `cc_wait done`, then
+   200k tokens and it has not compacted yet, `cc_wait done`, then
    `cc_send "/compact"` and wait for it to finish before sending more work.
 6. **Review only at the end**, once every worker has finished implementing — not
    plans, not partial work. See "Final review".
@@ -85,7 +86,15 @@ worker with `cc_send "/model <name>"` when the task changes:
 | `sonnet` | normal feature work, bug fixes, writing tests, refactors, build/test fix loops |
 | `opus` | hard debugging, architecture/design, tricky cross-module changes, security-sensitive code, anything sonnet failed at |
 Start cheap and escalate (haiku → sonnet → opus) if a worker struggles or the
-result fails review.
+result fails review. Default to `sonnet`; use `opus` only for the cases in its
+row, never as the default.
+
+**Save tokens (boss context fills up fast):**
+- Never `cc_screen` a worker that is still working; `cc_wait` alone tells you
+  when to look.
+- Don't re-read output you already have; for a question, read only what you need.
+- In the final review, read the diff (`git diff --stat`, then the files that
+  matter), not the workers' full logs.
 
 **Unattended by default.** Assume the user gave the task and left. Run the whole
 loop — start workers, answer them, final review, fixes — in one go without
