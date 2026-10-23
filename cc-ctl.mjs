@@ -5,7 +5,7 @@ const USAGE = `usage:
   cc-ctl screen <name> [--scrollback N]
   cc-ctl send <name> <text> [--enter]
   cc-ctl key <name> <Enter|Esc|Tab|ShiftTab|Up|Down|Left|Right|Backspace|CtrlC> [--repeat N]
-  cc-ctl wait <name> (--idle <sec> | --match <regex>) [--timeout <sec>]
+  cc-ctl wait <name> (--done | --idle <sec> | --match <regex>) [--timeout <sec>] [--quiet]
   cc-ctl status <name>
   cc-ctl stop <name>`
 
@@ -51,14 +51,16 @@ switch (cmd) {
   case 'wait': {
     const idle = flag('--idle')
     const match = flag('--match')
-    if (!idle && !match) fail(USAGE)
+    const done = has('--done')
+    if (!done && !idle && !match) fail(USAGE)
     const timeoutSec = parseFloat(flag('--timeout') || '600') || 600
     let r
-    try { r = await waitFor(name, { idleSec: idle ? parseFloat(idle) : 0, match, timeoutSec }) } catch (e) {
+    try { r = await waitFor(name, { done, idleSec: idle ? parseFloat(idle) : 0, match, timeoutSec }) } catch (e) {
       if (e instanceof NotRunning) fail(e.message, 3)
       fail(`cc-ctl: ${e.message}`)
     }
-    console.log(r.text)
+    // --quiet prints one line instead of the screen (for a boss waiting in the background).
+    console.log(has('--quiet') ? `${name}: ${r.met ? 'done' : r.exited ? 'exited' : 'timed out'}` : r.text)
     if (r.timedOut) fail(`cc-ctl: wait timed out after ${timeoutSec}s`, 2)
     process.exit(r.met ? 0 : 4)
   }

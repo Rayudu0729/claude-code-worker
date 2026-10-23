@@ -37,6 +37,13 @@ try {
   check(/since last send/.test(ss) && /^row-1\s*$/m.test(ss) && /^row-40\s*$/m.test(ss), 'cc_wait done + since_send returns output that scrolled off screen')
   const cap = text(await tool('cc_screen', { name, since_send: true, max_lines: 10 }))
   check(/earlier lines omitted/.test(cap) && !/^row-1\s*$/m.test(cap) && /^row-40\s*$/m.test(cap), 'since_send max_lines keeps only the last lines')
+  await tool('cc_send', { name, text: 'echo "noise"; echo "Worker report"; echo "- files: a.txt"' })
+  await tool('cc_wait', { name, match: '^- files: a.txt\\s*$', timeout: 20 })
+  const waitCmd = JSON.parse(text(start)).wait_command
+  const { execSync } = await import('node:child_process')
+  check(/: done$/.test(execSync(waitCmd, { encoding: 'utf8' }).trim()), 'wait_command (cc-ctl wait --done --quiet) prints one line')
+  const rep = text(await tool('cc_screen', { name, since_send: true }))
+  check(/report only/.test(rep) && !/^noise\s*$/m.test(rep) && /^- files: a.txt\s*$/m.test(rep), 'since_send returns only the Worker report block')
   const to = await tool('cc_wait', { name, match: 'never-appears-xyz', timeout: 2 })
   check(to.isError && text(to).split('\n').filter(Boolean).length <= 2, 'cc_wait timeout returns only a status line')
 

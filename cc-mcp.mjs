@@ -24,7 +24,25 @@ const WORKER_PROMPT = 'You are a Claude Code Worker run (cc-bridge), started and
   'do not use the worker-boss skill or the /worker-run command, and do not use cc_start. The orchestrator is your boss: plan and implement the whole task yourself without waiting for ' +
   'plan approval; it answers your questions while you work and reviews the finished code at the end. Follow its answers and corrections. ' +
   'Make reasonable decisions yourself; when you genuinely need one from the boss, ask one clear question with context — ' +
-  'what you are doing, what you found (files, errors), the options you see and which you recommend — then wait for the answer.'
+  'what you are doing, what you found (files, errors), the options you see and which you recommend — then wait for the answer. ' +
+  'Save tokens: write short — answer first, no greetings, recaps or narration between tool calls; keep code, commands, paths and ' +
+  'error messages exact. Read test/build output through a filter (summary lines and the first error, e.g. | Select-Object -Last 30), ' +
+  'not the full log. When you finish a task, end with a block that starts with the line "## Worker report" and lists: files changed, ' +
+  'tests/build run and their result, anything left open. Keep it under 15 lines.'
+
+// Effort per worker model when the boss does not set one: easy work thinks less.
+const EFFORT = { haiku: 'low', sonnet: 'medium', opus: 'high' }
+// The TUI renders the "## Worker report" heading without the hashes, so match the words.
+const REPORT = /^[^\w\n]*Worker report\b/gm
+
+// Plugins the user has enabled, turned off for lean workers (they bring skills, hooks and MCP servers
+// a worker rarely needs, and their text rides along on every request).
+function leanPlugins() {
+  try {
+    const on = JSON.parse(fs.readFileSync(path.join(os.homedir(), '.claude', 'settings.json'), 'utf8')).enabledPlugins ?? {}
+    return Object.fromEntries(Object.keys(on).filter((k) => on[k]).map((k) => [k, false]))
+  } catch { return {} }
+}
 
 const AUTOCOMPACT = 200000
 // Cap on lines a since_send read returns, so a long worker reply does not flood the boss's context.
@@ -47,7 +65,7 @@ const guard = (fn) => async (args) => {
 
 const nameSchema = z.string().regex(/^[a-z0-9][a-z0-9-]{0,31}$/i).describe('Run name: letters, digits, dashes, max 32')
 
-const server = new McpServer({ name: 'claude-code-worker', title: 'Claude Code Worker', version: '1.5.0' })
+const server = new McpServer({ name: 'claude-code-worker', title: 'Claude Code Worker', version: '1.6.0' })
 
 // ---------- runs ----------
 
@@ -59,13 +77,15 @@ server.registerTool('cc_start', {
     model: z.string().optional().describe('claude model for the run: haiku, sonnet, opus, or a full model id. Switch later with cc_send "/model <name>"'),
     permission_mode: z.enum(['acceptEdits', 'auto', 'bypassPermissions', 'manual', 'dontAsk', 'plan']).optional().describe('Permission mode for the run (default: the user\'s settings defaultMode, reported in the result)'),
     autocompact: z.number().int().min(50000).optional().describe('Auto-compact the worker\'s context at this many tokens (default 200000)'),
+    effort: z.enum(['low', 'medium', 'high', 'xhigh', 'max']).optional().describe('Effort level (default by model: haiku low, sonnet medium, opus high)'),
+    lean: z.boolean().optional().describe('Start without MCP servers and plugins to save tokens (default true). Set false when the task needs an MCP server or plugin skill, e.g. a database MCP'),
     args: z.array(z.string()).optional().describe('Extra claude arguments, e.g. ["--resume","<id>"], or a first prompt as the last item'),
     command: z.array(z.string()).optional().describe('Run this command instead of claude (for testing), e.g. ["powershell","-NoLogo"]'),
     visible: z.boolean().optional(),
     cols: z.number().int().min(40).max(400).optional().describe('Terminal width for hidden runs (default 120)'),
     rows: z.number().int().min(10).max(200).optional().describe('Terminal height for hidden runs (default 30)'),
   },
-}, guard(async ({ name, cwd, model, permission_mode, autocompact = AUTOCOMPACT, args = [], command, visible = true, cols, rows }) => {
+}, guard(async ({ name, cwd, model, permission_mode, autocompact = AUTOCOMPACT, effort, lean = true, args = [], command, visible = true, cols, rows }) => {
   if (process.env.CC_BRIDGE_WORKER) return err('this session is itself a Claude Code Worker; workers do not start workers')
   const existing = readSession(name)
   if (existing && pidAlive(existing.pid)) return err(`run "${name}" is already running (pid ${existing.pid})`)
@@ -77,11 +97,14 @@ server.registerTool('cc_start', {
   fs.mkdirSync(sessionDir, { recursive: true })
   // Workers always use the inline TUI: the user's "tui": "fullscreen" puts claude on the alternate
   // screen, which has no scrollback, so long replies scroll away before they can be read.
+  effort ??= EFFORT[model?.toLowerCase()]
   const flags = [
     ...(model ? ['--model', model] : []),
+    ...(effort ? ['--effort', effort] : []),
     ...(permission_mode ? ['--permission-mode', permission_mode] : []),
     '--autocompact', String(autocompact),
-    '--settings', JSON.stringify({ tui: 'default' }),
+    ...(lean ? ['--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}'] : []),
+    '--settings', JSON.stringify({ tui: 'default', ...(lean ? { enabledPlugins: leanPlugins() } : {}) }),
   ]
   const full = command ?? ['claude', ...flags, '--append-system-prompt', WORKER_PROMPT, ...args]
   const display = command ? command.join(' ') : ['claude', ...flags, '--append-system-prompt', '<worker prompt>', ...args].join(' ')
@@ -104,7 +127,9 @@ server.registerTool('cc_start', {
 
   for (let i = 0; i < 60; i++) {
     const s = readSession(name)
-    if (s) return ok({ started: name, pid: s.pid, command: s.command, cwd: s.cwd, visible, ...(mode ? { permission_mode: mode, autocompact } : {}) })
+    // wait_command: run it in the background to be woken when the worker finishes, instead of polling cc_wait.
+    if (s) return ok({ started: name, pid: s.pid, command: s.command, cwd: s.cwd, visible, ...(mode ? { permission_mode: mode, autocompact, effort: effort ?? '<default>', lean } : {}),
+      wait_command: `node "${path.join(dir, 'cc-ctl.mjs')}" wait ${name} --done --quiet --timeout 3600` })
     await sleep(250)
   }
   try { fs.unlinkSync(specFile) } catch {}
@@ -130,6 +155,9 @@ async function screenText(name, sinceSend, scrollback = 0, maxLines = MAX_LINES)
   const state = s.exited ? 'exited' : WORKING.test(s.text) ? 'working' : 'idle'
   const note = sinceSend && !s.sinceSend ? ', since_send unavailable: visible screen only' : sinceSend ? ', since last send' : ''
   let text = s.text
+  // A finished worker ends with "## Worker report": that block is all the boss needs.
+  const rep = sinceSend && maxLines && state === 'idle' ? ([...text.matchAll(REPORT)].at(-1)?.index ?? -1) : -1
+  if (rep >= 0) text = `[worker report only; max_lines=0 for the full output]\n${text.slice(rep)}`
   const lines = text.split('\n')
   if (sinceSend && maxLines && lines.length > maxLines) text = `[${lines.length - maxLines} earlier lines omitted; max_lines=0 for all]\n${lines.slice(-maxLines).join('\n')}`
   return `[${name} ${state}, last output ${idle}s ago${note}]\n${text}`
