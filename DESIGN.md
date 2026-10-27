@@ -98,8 +98,10 @@ One boss session, Claude Code CLI or Desktop, with the same rules in both.
 | Timed ask | `lib/ask.mjs`, `scripts/ask-dialog.*` | A detached node process shows the dialog (WinForms / osascript / zenity) and writes `asks/<id>.out.json`. Callers wait at most 50 s per call. On no answer the boss decides itself, as the skill says. |
 | Maintenance | `lib/maint.mjs` | `doctor` checks node, deps, claude, git, the state folder, stale sessions and the dialog tool. `cleanup` (also run at MCP start) removes dead session files and old logs, reports and asks, and keeps the last 1000 events. |
 
-`.mcp.json` uses `${CLAUDE_PLUGIN_ROOT:-.}`, so opening this repo as a project starts its own server instead
-of failing on an unset variable.
+`.mcp.json` must use plain `${CLAUDE_PLUGIN_ROOT}`: plugins substitute that literal string and do not support
+a `:-default`, so `${CLAUDE_PLUGIN_ROOT:-.}` (tried in 1.7.0) became `./scripts/...` and broke the plugin outside
+this repo. Opened as a project, this repo's own copy of the server cannot start; the installed plugin's copy is
+the one to use.
 
 ## Out of scope
 

@@ -1,6 +1,6 @@
 {
   "name": "claude-code-worker",
-  "version": "1.7.0",
+  "version": "1.7.1",
   "description": "Drive interactive Claude Code CLI runs as workers from one boss Claude session, CLI or Desktop (PTY bridge + MCP server)",
   "private": true,
   "type": "module",
