@@ -1,7 +1,7 @@
 {
   "name": "cli-workers",
   "metadata": {
-    "description": "Claude Code Worker: Claude Desktop as boss, Claude Code CLI runs as workers."
+    "description": "Claude Code Worker: one boss session (Claude Code CLI or Desktop), Claude Code CLI runs as workers."
   },
   "owner": {
     "name": "Rayudu0729",

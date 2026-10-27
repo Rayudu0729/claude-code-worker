@@ -6,6 +6,9 @@ import xtermMod from '@xterm/headless'
 import { validName, readSession, writeSession, removeSession, pidAlive } from './lib/session.mjs'
 import { KEYS } from './lib/keys.mjs'
 import { resolveCommand } from './lib/command.mjs'
+import { WORKING, classify } from './lib/client.mjs'
+import { emit } from './lib/events.mjs'
+import { UsageTracker, findTranscript } from './lib/usage.mjs'
 
 const pty = ptyMod.default ?? ptyMod
 const { Terminal } = xtermMod.default ?? xtermMod
@@ -20,7 +23,8 @@ const argv = process.argv.slice(2)
 if (argv[0] !== 'start') usage()
 const name = argv[1]
 if (!validName(name)) usage(`invalid name "${name ?? ''}": use letters, digits and dashes, max 32`)
-// --spec <file>: { command: [...], cols, rows } written by the MCP server; read once, then deleted.
+// --spec <file>: { command: [...], display, cols, rows, sessionId, reportFile, budgetTokens, meta,
+// restart: { max, command } } written by the MCP server; read once, then deleted.
 let spec = {}
 const specAt = argv.indexOf('--spec')
 if (specAt >= 0) {
@@ -39,24 +43,31 @@ if (existing && pidAlive(existing.pid)) {
 }
 removeSession(name)
 
-const [file, fileArgs] = resolveCommand(userCmd[0], userCmd.slice(1))
 const cols = process.stdout.columns || spec.cols || 120
 const rows = process.stdout.rows || spec.rows || 30
 const term = new Terminal({ cols, rows, scrollback: 2000, allowProposedApi: true })
-const child = pty.spawn(file, fileArgs, { name: 'xterm-256color', cols, rows, cwd: process.cwd(), env: process.env })
 
 let lastOutputAt = Date.now()
 let bracketedPaste = false
 let exited = false
 let exitCode = null
+let stopRequested = false
+let restarts = 0
 
-child.onData((d) => {
-  process.stdout.write(d)
-  term.write(d)
-  lastOutputAt = Date.now()
-  const on = d.lastIndexOf('\x1b[?2004h'), off = d.lastIndexOf('\x1b[?2004l')
-  if (on !== off) bracketedPaste = on > off
-})
+function spawnChild(cmd) {
+  const [file, fileArgs] = resolveCommand(cmd[0], cmd.slice(1))
+  const c = pty.spawn(file, fileArgs, { name: 'xterm-256color', cols: term.cols, rows: term.rows, cwd: process.cwd(), env: process.env })
+  c.onData((d) => {
+    process.stdout.write(d)
+    term.write(d)
+    lastOutputAt = Date.now()
+    const on = d.lastIndexOf('\x1b[?2004h'), off = d.lastIndexOf('\x1b[?2004l')
+    if (on !== off) bracketedPaste = on > off
+  })
+  c.onExit(({ exitCode: code }) => onChildExit(code))
+  return c
+}
+let child = spawnChild(userCmd)
 
 if (process.stdin.isTTY) process.stdin.setRawMode(true)
 process.stdin.on('data', (d) => { if (!exited) child.write(d.toString('utf8')) })
@@ -86,7 +97,9 @@ function screen(scrollback, sinceSend) {
   const lines = []
   for (let i = start; i < end; i++) lines.push(b.getLine(i)?.translateToString(true) ?? '')
   while (lines.length && lines[lines.length - 1] === '') lines.pop()
-  return { text: lines.join('\n'), cursor: { x: b.cursorX, y: b.cursorY }, cols: term.cols, rows: term.rows, lastOutputAt, exited, altScreen: alt, sinceSend: sinceSendOk }
+  // A screen clear rewrites the viewport above the marker: nothing after it, so show the visible screen.
+  if (sinceSendOk && !lines.length) return screen(scrollback, false)
+  return { text: lines.join('\n'), cursor: { x: b.cursorX, y: b.cursorY }, cols: term.cols, rows: term.rows, lastOutputAt, lastSendAt, exited, altScreen: alt, sinceSend: sinceSendOk }
 }
 
 const token = crypto.randomBytes(32).toString('hex')
@@ -146,7 +159,7 @@ const server = http.createServer(async (req, res) => {
       return send(res, 200, screen(n, url.searchParams.get('since') === 'send'))
     }
     if (req.method === 'GET' && url.pathname === '/status') {
-      return send(res, 200, { name, pid: process.pid, childPid: child.pid, running: !exited, exitCode, cols: term.cols, rows: term.rows, lastOutputAt, altScreen: term.buffer.active.type === 'alternate', bracketedPaste })
+      return send(res, 200, { name, pid: process.pid, childPid: child.pid, running: !exited, exitCode, state: exited ? 'exited' : state, cols: term.cols, rows: term.rows, lastOutputAt, lastSendAt, altScreen: term.buffer.active.type === 'alternate', bracketedPaste, restarts, ...(tokenUsage ? { usage: tokenUsage.read(), budgetTokens: spec.budgetTokens ?? null } : {}) })
     }
     if (req.method === 'POST' && url.pathname === '/send') {
       const { text, enter } = await readBody(req)
@@ -154,6 +167,7 @@ const server = http.createServer(async (req, res) => {
       if (exited) return send(res, 409, { error: 'process has exited' })
       sendMarker?.dispose()
       sendMarker = term.buffer.active.type === 'normal' ? term.registerMarker(0) : null
+      lastSendAt = Date.now()
       if (text) await typeText(text)
       if (enter) { await wait(text ? (text.length > 200 ? 400 : 150) : 0); child.write(KEYS.Enter) }
       return send(res, 200, { ok: true })
@@ -167,6 +181,7 @@ const server = http.createServer(async (req, res) => {
       return send(res, 200, { ok: true })
     }
     if (req.method === 'POST' && url.pathname === '/stop') {
+      stopRequested = true
       stopChild()
       return send(res, 200, { ok: true })
     }
@@ -177,7 +192,7 @@ const server = http.createServer(async (req, res) => {
 })
 
 server.listen(0, '127.0.0.1', () => {
-  writeSession(name, { name, port: server.address().port, token, pid: process.pid, command: spec.display ?? userCmd.join(' '), cwd: process.cwd(), started: new Date().toISOString() })
+  writeSession(name, { name, port: server.address().port, token, pid: process.pid, command: spec.display ?? userCmd.join(' '), cwd: process.cwd(), started: new Date().toISOString(), ...(spec.sessionId ? { sessionId: spec.sessionId } : {}), ...(spec.meta ?? {}) })
 })
 
 let cleaned = false
@@ -189,16 +204,69 @@ function cleanup() {
   if (process.stdin.isTTY) try { process.stdin.setRawMode(false) } catch {}
 }
 
-child.onExit(({ exitCode: code }) => {
+// A crash (non-zero exit the boss did not ask for) restarts the run with spec.restart.command, which
+// resumes the same claude conversation (or starts it again when it has no transcript yet), up to
+// spec.restart.max times.
+function onChildExit(code) {
+  if (!stopRequested && code !== 0 && spec.restart && restarts < spec.restart.max) {
+    restarts++
+    process.stdout.write(`\r\n[cc-bridge] "${name}" exited with code ${code}; restarting (${restarts}/${spec.restart.max})\r\n`)
+    emit(name, 'restarted', { code, restarts })
+    // A stop that arrives during the pause ends the bridge instead.
+    const cmd = spec.sessionId && !findTranscript(spec.sessionId) && spec.restart.fresh ? spec.restart.fresh : spec.restart.command
+    setTimeout(() => { if (stopRequested) onChildExit(code); else child = spawnChild(cmd) }, 2000)
+    return
+  }
   exited = true
   exitCode = code
+  clearInterval(watcher)
+  emit(name, 'exited', { code })
   cleanup()
   process.stdout.write(`\r\n[cc-bridge] "${name}" exited with code ${code}\r\n`)
   setTimeout(() => process.exit(code ?? 0), 50)
-})
+}
+
+// Watch the screen: when a claude turn ends (working -> idle, steady 2 s) emit what the worker is
+// waiting for, so a boss blocked in wait-any wakes once per change. Also enforce the token budget.
+let lastSendAt = 0
+let state = 'starting'
+let wasWorking = false
+let lastText = null
+let steadySince = Date.now()
+let lastUsageCheck = 0
+const tokenUsage = spec.sessionId ? new UsageTracker(spec.sessionId) : null
+
+function reportFresh() {
+  if (!spec.reportFile || !lastSendAt) return false
+  return (fs.statSync(spec.reportFile, { throwIfNoEntry: false })?.mtimeMs ?? 0) > lastSendAt
+}
+
+const watcher = setInterval(() => {
+  if (exited) return
+  const text = screen(0, false).text
+  if (text !== lastText) { lastText = text; steadySince = Date.now() }
+  if (WORKING.test(text)) { wasWorking = true; state = 'working' }
+  else if (Date.now() - steadySince >= 2000) {
+    const kind = classify(text, screen(0, true).text, reportFresh())
+    // A finished turn always reports; a permission menu can also appear without a visible turn.
+    if (wasWorking || (kind === 'permission' && state !== 'permission')) emit(name, kind)
+    wasWorking = false
+    state = kind === 'question' && state === 'starting' ? 'idle' : kind
+  }
+  if (tokenUsage && spec.budgetTokens && !stopRequested && Date.now() - lastUsageCheck > 5000) {
+    lastUsageCheck = Date.now()
+    const u = tokenUsage.read()
+    if (u.tokens > spec.budgetTokens) {
+      stopRequested = true
+      emit(name, 'over_budget', { tokens: u.tokens, budget: spec.budgetTokens })
+      process.stdout.write(`\r\n[cc-bridge] "${name}" used ${u.tokens} tokens, over its budget of ${spec.budgetTokens}; stopping\r\n`)
+      stopChild()
+    }
+  }
+}, 1000)
 
 process.on('exit', () => { removeSession(name) })
-process.on('SIGTERM', () => { stopChild() })
+process.on('SIGTERM', () => { stopRequested = true; stopChild() })
 process.on('uncaughtException', (e) => {
   console.error(`[cc-bridge] ${e.stack || e}`)
   try { child.kill() } catch {}

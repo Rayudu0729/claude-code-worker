@@ -1,16 +1,17 @@
 ---
 name: worker-boss
-description: Use in a Claude Desktop (or main Claude Code) session whenever the user hands over an implementation task to be done end to end — features, fixes, refactors, multi-file changes, builds or test loops — especially "do X and I will be away". Act as the boss - delegate the work to Claude Code Worker CLI runs (cc_* tools), answer their questions, review only at the end. Do not use when you are yourself a Claude Code Worker.
+description: Use in the main session — Claude Code CLI or Claude Desktop, either one is the boss — whenever the user hands over an implementation task to be done end to end — features, fixes, refactors, multi-file changes, builds or test loops — especially "do X and I will be away". Act as the boss - delegate the work to Claude Code Worker CLI runs (cc_* tools), answer their questions, review only at the end. Do not use when you are yourself a Claude Code Worker.
 ---
 
-# Worker boss: Desktop = boss, CLI = Claude Code Workers
+# Worker boss: your main session = boss, CLI runs = Claude Code Workers
 
 If your system prompt says you are a Claude Code Worker, stop: this skill is not for you.
 
-**Desktop is the boss.** It owns the decisions: understands the request, splits it
+**The main session is the boss** — a Claude Code CLI session or Claude Desktop,
+the rules are the same in both. It owns the decisions: understands the request, splits it
 into worker tasks, picks each worker's model, answers worker questions while they
 work, does the **final review** once everything is implemented, and reports to the
-user. Desktop may make **small edits itself** (one file, a few lines, typo/config
+user. The boss may make **small edits itself** (one file, a few lines, typo/config
 fixes). Anything bigger — multi-file changes, builds, test runs, long
 investigations — goes to a CLI worker.
 
@@ -21,6 +22,16 @@ investigations — goes to a CLI worker.
    effort level by model (haiku low, sonnet medium, opus high; override with
    `effort`), and start **lean**: no MCP servers or plugins. Pass `lean: false`
    only when the task needs one (e.g. a database MCP, a plugin skill).
+   - `role` sets a preset: `implementer`, `explorer` (read-only), `tester`,
+     `reviewer` (read-only), `docs` (`cc_roles` lists them; your own arguments win).
+   - `worktree: true` whenever two or more workers change the same repo: each
+     gets `<repo>-worktrees/<name>` on branch `worker/<name>`, so they never edit
+     the same files. It starts from `HEAD` — commit or mention uncommitted work.
+   - `budget_tokens` caps a worker's spend (it is stopped, event `over_budget`).
+     Crashed workers restart themselves and resume (`restart`, default 2).
+   - **Several tasks with an order?** Use `cc_queue_add` instead: tasks with
+     `depends_on`, at most `max_parallel` workers at once; each worker is started
+     and briefed when its dependencies are `done`. `cc_queue_list` shows states.
 2. `cc_wait` with `done: true` before every `cc_send`, so you never type over
    the user or a busy worker.
 3. `cc_send` a self-contained brief: goal, files/area, constraints, and what
@@ -29,7 +40,11 @@ investigations — goes to a CLI worker.
    worker plans and implements on its own — no plan approval step.
 4. **Wait without polling.** After each send, run the `wait_command` from the
    `cc_start` result with Bash `run_in_background: true` and end your turn (or
-   do other work); you are woken when the worker finishes or stops to ask. Then
+   do other work); you are woken when the worker finishes or stops to ask. With
+   several workers run one `wait_any_command` instead (`cc-ctl wait-any`): it
+   wakes you at the first event — `done`, `question`, `permission`, `exited`,
+   `restarted`, `over_budget` — and prints a cursor; pass it as `--since` to the
+   next wait so no event is missed (`cc_wait_any` does the same in ≤ 50 s). Then
    call `cc_wait` with `done: true, since_send: true` once — it returns at once
    with the worker's "Worker report" block when it finished, or the last 150
    lines when it is asking something (`max_lines: 0` only if you truly need
@@ -45,10 +60,13 @@ investigations — goes to a CLI worker.
    gone); then tell the user it is done.
 
 **Final review (boss accepts before done):** after all workers report done, read
+`cc_report` (files changed, tests run, open items) to know where to look, then read
 the actual diff/files, not the workers' summaries. Check correctness, edge cases,
 that it does what the user asked, follows the repo's conventions, and that the
-tests/build really ran and passed (run or ask for them if unclear). For a real
-defect, `cc_send` the responsible worker the exact problem (file:line, what is
+tests/build really ran and passed (run or ask for them if unclear). Workers in
+worktrees: review each `worker/<name>` branch, merge it into the user's branch
+only if the task said to (otherwise report the branch names), then `cc_worktree
+remove` the merged ones. For a real defect, `cc_send` the responsible worker the exact problem (file:line, what is
 wrong, what you expect), wait for it to finish, and review again. A one-line fix
 you may make yourself.
 
@@ -80,8 +98,13 @@ Never leave a worker waiting, and never bounce the question back.
    anything risky — deleting data, force pushes, production systems, secrets,
    files outside the project.
 7. **Only the user's decisions go to the user:** scope changes, irreversible or
-   risky actions, publishing, deleting data, money, credentials. Send those as a
-   push notification and keep the other work going.
+   risky actions, publishing, deleting data, money, credentials. Ask with
+   `cc_ask_user` (question, 2–4 options, your `recommended` one; the dialog
+   closes after 120 s) and keep the other work going; poll `cc_ask_result` if it
+   is still pending. **No answer = you decide:** analyze the question against the
+   user's goal and the codebase, pick the best option, state why, and log it as a
+   decision. For risky or irreversible choices the best option is the safe,
+   non-destructive one.
 8. Keep a one-line note of each decision you made; list them in the final
    summary so the user sees what was decided on their behalf.
 
@@ -111,7 +134,7 @@ row, never as the default.
 loop — start workers, answer them, final review, fixes — in one go without
 stopping to ask "should I continue?".
 - At the start of any task that uses workers, ask the host to keep the PC awake
-  (`mcp__ccd_host__request_keep_awake`) for the expected duration.
+  (`mcp__ccd_host__request_keep_awake`, Desktop only; skip it in the CLI) for the expected duration.
 - Never end your turn while a worker is still working unless a background
   `wait_command` for it is running (that wakes you); otherwise keep looping
   `cc_wait`. Keep context small — read `cc_screen` only when a worker is idle, not on every
@@ -119,15 +142,16 @@ stopping to ask "should I continue?".
 - If a worker is stuck (same error 3 times, no progress for ~15 min), escalate its
   model or re-brief it; if still stuck, stop it and report.
 - A decision only the user can make (scope change, deleting data, publishing,
-  credentials, money): send a push notification (`PushNotification`) with the
-  one question, keep every other worker going, and leave that part undone rather
-  than guessing.
+  credentials, money): ask it with `cc_ask_user` (see rule 7). If the user does
+  not answer in time, decide yourself as rule 7 says and carry on; never block
+  waiting for the user.
 - Do not commit or push unless the task said so.
 - When everything is finished and reviewed (or blocked), send a push
   notification with a one-line result, then write the final summary: what each
   worker did, review result, test/build status, anything left for the user.
 
-Other controls: `cc_list` (running workers), `cc_status`, `cc_key ShiftTab`
+If the tools misbehave, run `cc_doctor`; `cc_cleanup` removes leftovers of dead runs.
+Other controls: `cc_list` (workers with state and tokens), `cc_status`, `cc_key ShiftTab`
 (cycle permission mode), `cc_cli` (`claude mcp …` / `claude plugin …`),
 `cc_settings_get/set`, `cc_permission`. Tool details:
 the plugin README.
