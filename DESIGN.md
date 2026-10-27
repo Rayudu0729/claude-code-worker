@@ -4,17 +4,17 @@ User-level tool, installed per user (e.g. `~/.claude/tools/cc-bridge`).
 
 ## Purpose
 
-Let the user and a Claude desktop session drive the **same** interactive `claude` CLI run. The user
-watches and types in their terminal tab as usual; the desktop session reads the screen and sends text
+Let the user and a boss Claude session (Claude Code CLI or Desktop) drive the **same** interactive `claude` CLI run. The user
+watches and types in their terminal tab as usual; the boss session reads the screen and sends text
 or keys. The run uses the CLI's own account (`CLAUDE_CODE_OAUTH_TOKEN` from the user's shell), not the
-desktop session's.
+boss session's.
 
 ## Components
 
 | Unit | Does | Depends on |
 |---|---|---|
 | `cc-bridge.mjs` | `start <name> [-- args]`: spawns `claude` (or another command for tests) in a pseudo-terminal, passes output to the real terminal and keystrokes to the PTY, mirrors output into a headless terminal, serves the control channel | `node-pty`, `@xterm/headless` |
-| `cc-ctl.mjs` | Client the desktop session runs: `screen`, `send`, `key`, `wait`, `status`, `stop` | Node built-ins only |
+| `cc-ctl.mjs` | Client the boss session runs: `screen`, `send`, `key`, `wait`, `status`, `stop` | Node built-ins only |
 | `cc-bridge.cmd`, `cc-ctl.cmd` | Windows launchers | — |
 
 ## Control channel
@@ -33,7 +33,7 @@ desktop session's.
   - `POST /stop` → sends Ctrl-C twice, then kills the PTY after 3 s if it is still running.
 - `cc-ctl wait <name> --idle <sec> | --match <regex> [--timeout <sec>]` polls `/screen` every 500 ms
   client-side until the screen has not changed for `idle` seconds or the regex matches; exit 0 when
-  met, 2 on timeout. This keeps waiting out of the desktop session's turn loop.
+  met, 2 on timeout. This keeps waiting out of the boss session's turn loop.
 
 ## Behaviour
 
@@ -58,7 +58,7 @@ desktop session's.
 1. Smoke: `cc-bridge start t1 -- powershell -NoLogo`; `cc-ctl send t1 "echo hi" --enter`;
    `cc-ctl wait t1 --match "^hi$"`; `cc-ctl screen t1` shows `hi`; `cc-ctl stop t1` → file removed.
 2. Auth: a request with a bad token gets 401; the port is not listening on the LAN address.
-3. Real run: `cc-bridge start demo` in a terminal tab; the desktop session sends a prompt that makes
+3. Real run: `cc-bridge start demo` in a terminal tab; the boss session sends a prompt that makes
    `claude` ask a question, waits for the menu, answers it with `key Down`/`key Enter`, and reads the
    result; the user types in the same run at the same time.
 
@@ -81,6 +81,27 @@ the repo root as a one-plugin marketplace. `.mcp.json` starts `scripts/mcp-launc
 lock dir) before importing `cc-mcp.mjs`; a SessionStart hook runs the same check. The boss rules are
 the `worker-boss` skill; `/worker-run` and `/workers` are commands.
 
+## Workers v2 (added 2026-10-27)
+
+One boss session, Claude Code CLI or Desktop, with the same rules in both.
+
+| Piece | Where | How |
+|---|---|---|
+| Events | `cc-bridge.mjs` watcher, `lib/events.mjs` | Every second the bridge checks its screen. After "esc to interrupt" disappears and the screen holds for 2 s it appends `{t, name, kind}` to `events.jsonl`: `done` if a Worker report is in the output since the last send (or the JSON report is newer than that send), `permission` if a menu is up, else `question`. `exited`, `restarted` and `over_budget` come from the exit, restart and budget paths. `wait-any` / `cc_wait_any` poll the file from a cursor. |
+| Since-send after a clear | `screen()` | A clear rewrites the viewport above the send marker; an empty since-send range falls back to the visible screen. |
+| Structured reports | worker prompt, `--add-dir reports` | The worker writes `reports/<name>.json` before its text report; the file's mtime against `lastSendAt` says whether it is fresh. |
+| Token use and budgets | `lib/usage.mjs` | Workers start with `--session-id <uuid>`. The bridge reads `~/.claude/projects/*/<uuid>.jsonl` incrementally, counting each message id once. With `budgetTokens` it stops the run (checked every 5 s). |
+| Restarts | `onChildExit` | A non-zero exit without `/stop` respawns the PTY child after 2 s with `--resume <uuid>`, or the original command when no transcript exists yet, up to `restart.max`. |
+| Worktrees | `lib/worktree.mjs` | `git worktree add -b worker/<name> <repo>-worktrees/<name> HEAD`, using real long paths so 8.3 names stay relative. The trust prompt in a new worktree is accepted with Enter. |
+| Queue | `lib/queue.mjs`, MCP server | `queue.json` holds the tasks. A 3 s tick in the MCP server updates active tasks from `/status`, then starts pending ones whose dependencies are done, up to `max_parallel`. Starting means: start the worker, wait for done, pause 3 s (claude drops an Enter sent right after its first screen settles), then send the brief. |
+| Roles | `lib/roles.mjs` | Built-in presets merged with `~/.claude/cc-workers/roles.json`. |
+| Timed ask | `lib/ask.mjs`, `scripts/ask-dialog.*` | A detached node process shows the dialog (WinForms / osascript / zenity) and writes `asks/<id>.out.json`. Callers wait at most 50 s per call. On no answer the boss decides itself, as the skill says. |
+| Maintenance | `lib/maint.mjs` | `doctor` checks node, deps, claude, git, the state folder, stale sessions and the dialog tool. `cleanup` (also run at MCP start) removes dead session files and old logs, reports and asks, and keeps the last 1000 events. |
+
+`.mcp.json` uses `${CLAUDE_PLUGIN_ROOT:-.}`, so opening this repo as a project starts its own server instead
+of failing on an unset variable.
+
 ## Out of scope
 
-Multiple viewers, remote access, recording or replay, and a web UI.
+Multiple viewers, remote access, recording or replay, and a web UI. macOS and Linux are expected to work
+but are untested.

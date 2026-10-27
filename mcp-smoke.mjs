@@ -3,6 +3,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { execSync } from 'node:child_process'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 
@@ -15,12 +16,15 @@ const client = new Client({ name: 'mcp-smoke', version: '1.0.0' })
 await client.connect(new StdioClientTransport({ command: process.execPath, args: [path.join(dir, 'cc-mcp.mjs')], stderr: 'inherit' }))
 const tool = (name, args = {}) => client.callTool({ name, arguments: args })
 const name = `msmoke-${process.pid}`
+// PowerShell imitating a claude turn: the status-line text while "working", then a cleared screen with a report.
+const FAKE_TURN = 'Write-Host "esc to interrupt"; Start-Sleep 3; Clear-Host; Write-Host "Worker report"'
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'cc-mcp-'))
 
 try {
   const { tools } = await client.listTools()
   const names = tools.map((t) => t.name)
-  check(['cc_start', 'cc_list', 'cc_screen', 'cc_send', 'cc_key', 'cc_wait', 'cc_status', 'cc_stop', 'cc_cli', 'cc_settings_get', 'cc_settings_set', 'cc_permission'].every((n) => names.includes(n)), `all tools listed (${names.length})`)
+  check(['cc_start', 'cc_list', 'cc_screen', 'cc_send', 'cc_key', 'cc_wait', 'cc_status', 'cc_stop', 'cc_cli', 'cc_settings_get', 'cc_settings_set', 'cc_permission',
+    'cc_roles', 'cc_wait_any', 'cc_report', 'cc_queue_add', 'cc_queue_list', 'cc_queue_cancel', 'cc_worktree', 'cc_ask_user', 'cc_ask_result', 'cc_doctor', 'cc_cleanup'].every((n) => names.includes(n)), `all tools listed (${names.length})`)
 
   const start = await tool('cc_start', { name, cwd: tmp, visible, command: ['powershell', '-NoLogo', '-NoProfile'] })
   check(!start.isError, `cc_start (${visible ? 'visible' : 'hidden'}): ${text(start).replace(/\s+/g, ' ')}`)
@@ -40,7 +44,7 @@ try {
   await tool('cc_send', { name, text: 'echo "noise"; echo "Worker report"; echo "- files: a.txt"' })
   await tool('cc_wait', { name, match: '^- files: a.txt\\s*$', timeout: 20 })
   const waitCmd = JSON.parse(text(start)).wait_command
-  const { execSync } = await import('node:child_process')
+
   check(/: done$/.test(execSync(waitCmd, { encoding: 'utf8' }).trim()), 'wait_command (cc-ctl wait --done --quiet) prints one line')
   const rep = text(await tool('cc_screen', { name, since_send: true }))
   check(/report only/.test(rep) && !/^noise\s*$/m.test(rep) && /^- files: a.txt\s*$/m.test(rep), 'since_send returns only the Worker report block')
@@ -51,6 +55,13 @@ try {
   const ml = text(await tool('cc_wait', { name, match: '^ml-b\\s*$', timeout: 20 }))
   check(/^ml-a\s*$/m.test(ml) && /^ml-b\s*$/m.test(ml), 'multi-line cc_send runs both lines')
 
+  // A fake claude turn: "esc to interrupt" on screen, then cleared and a report printed → a done event.
+  const since = Date.now()
+  await tool('cc_send', { name, text: FAKE_TURN })
+  const ev = JSON.parse(text(await tool('cc_wait_any', { names: [name], since, timeout: 40 })))
+  check(ev.events.some((e) => e.name === name && e.kind === 'done') && ev.cursor > since, `cc_wait_any sees the done event (${ev.events.map((e) => e.kind).join(',')})`)
+  check(JSON.parse(text(await tool('cc_list'))).find((s) => s.name === name)?.state === 'done', 'cc_list shows the worker state')
+
   check(JSON.parse(text(await tool('cc_status', { name }))).running === true, 'cc_status running')
   check(!(await tool('cc_key', { name, key: 'Enter' })).isError, 'cc_key Enter')
 
@@ -60,6 +71,43 @@ try {
   check(/^stopped /.test(text(await tool('cc_stop', { name }))), 'cc_stop waits until the run is gone')
   check(!text(await tool('cc_list')).includes(name), 'cc_list no longer shows the run')
   check((await tool('cc_screen', { name })).isError, 'cc_screen on a stopped run is an error')
+
+  // Worktrees: a worker in its own worktree on branch worker/<name>, then removed with its branch.
+  const repo = path.join(tmp, 'repo')
+  fs.mkdirSync(repo)
+  const git = (...a) => execSync(`git -C "${repo}" ${a.join(' ')}`, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
+  git('init', '-q'); git('-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-q', '--allow-empty', '-m', 'init')
+  const wname = `${name}-wt`
+  const ws = JSON.parse(text(await tool('cc_start', { name: wname, cwd: repo, visible: false, worktree: true, command: ['powershell', '-NoLogo', '-NoProfile'] })))
+  check(ws.branch === `worker/${wname}` && fs.existsSync(ws.worktree) && ws.cwd.toLowerCase() === ws.worktree.toLowerCase(), `cc_start worktree runs in ${ws.worktree}`)
+  check((await tool('cc_worktree', { action: 'remove', cwd: repo, name: wname })).isError, 'cc_worktree refuses to remove a running worker\'s worktree')
+  await tool('cc_stop', { name: wname })
+  check(JSON.parse(text(await tool('cc_worktree', { action: 'list', cwd: repo }))).some((w) => w.name === wname), 'cc_worktree list shows it')
+  const rm = await tool('cc_worktree', { action: 'remove', cwd: repo, name: wname, delete_branch: true })
+  check(!rm.isError && !fs.existsSync(ws.worktree) && !git('branch').includes(`worker/${wname}`), 'cc_worktree remove deletes worktree and branch')
+
+  // Queue: b waits for a; both finish (fake turns) and end as done.
+  const qa = `${name}-qa`, qb = `${name}-qb`
+  const cmd = ['powershell', '-NoLogo', '-NoProfile']
+  const qadd = await tool('cc_queue_add', { tasks: [
+    { id: qa, prompt: FAKE_TURN, cwd: tmp, visible: false, command: cmd },
+    { id: qb, prompt: FAKE_TURN, cwd: tmp, visible: false, command: cmd, depends_on: [qa] },
+  ] })
+  check(!qadd.isError, `cc_queue_add: ${text(qadd).slice(0, 120).replace(/\s+/g, ' ')}`)
+  let q
+  for (let i = 0; i < 60; i++) {
+    q = JSON.parse(text(await tool('cc_queue_list'))).tasks.filter((t) => [qa, qb].includes(t.id))
+    if (q.every((t) => ['done', 'failed', 'blocked'].includes(t.state))) break
+    if (i === 3) check(q.find((t) => t.id === qb).state === 'pending', 'dependent task waits while its dependency runs')
+    await new Promise((r) => setTimeout(r, 1000))
+  }
+  check(q.every((t) => t.state === 'done'), `queued tasks finish in order (${q.map((t) => `${t.id}=${t.state}${t.error ? ` ${t.error}` : ''}`).join(', ')})`)
+  for (const n of [qa, qb]) await tool('cc_stop', { name: n })
+  await tool('cc_queue_cancel', { ids: [qa, qb], clear_finished: true })
+
+  check(JSON.parse(text(await tool('cc_roles'))).reviewer?.model === 'opus', 'cc_roles lists the built-in roles')
+  check(JSON.parse(text(await tool('cc_doctor'))).checks.length >= 8, 'cc_doctor runs its checks')
+  check(Array.isArray(JSON.parse(text(await tool('cc_cleanup', { days: 30 }))).removed), 'cc_cleanup runs')
 
   const ver = await tool('cc_cli', { args: ['--version'] })
   check(!ver.isError && /Claude Code/.test(text(ver)), `cc_cli --version: ${text(ver).split('\n')[1]}`)
